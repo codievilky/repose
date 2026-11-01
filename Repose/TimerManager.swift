@@ -35,31 +35,32 @@ class TimerManager: ObservableObject {
     private var secondsBeforePause: Int = 0
     private var pauseReason: PauseReason = .manual
 
-    let meetingDetector = MeetingDetector()
+    let meetingDetector: MeetingDetector
     let overlayManager = OverlayManager()
+    private let defaults: UserDefaults
 
     // Activity to prevent App Nap
     private var activity: NSObjectProtocol?
 
     var workDurationSeconds: Int {
-        UserDefaults.standard.integer(forKey: SettingsKey.workDurationMinutes).clamped(to: 1...120) * 60
+        defaults.integer(forKey: SettingsKey.workDurationMinutes).clamped(to: 1...120) * 60
     }
 
     var breakDurationSeconds: Int {
-        let val = UserDefaults.standard.integer(forKey: SettingsKey.breakDurationSeconds)
+        let val = defaults.integer(forKey: SettingsKey.breakDurationSeconds)
         return val.clamped(to: 5...300)
     }
 
     var pauseDuringMeetings: Bool {
-        UserDefaults.standard.bool(forKey: SettingsKey.pauseDuringMeetings)
+        defaults.bool(forKey: SettingsKey.pauseDuringMeetings)
     }
 
     var muteSounds: Bool {
-        UserDefaults.standard.bool(forKey: SettingsKey.muteSounds)
+        defaults.bool(forKey: SettingsKey.muteSounds)
     }
 
     var pauseWhenIdle: Bool {
-        UserDefaults.standard.bool(forKey: SettingsKey.pauseWhenIdle)
+        defaults.bool(forKey: SettingsKey.pauseWhenIdle)
     }
 
     var menuBarText: String {
@@ -96,9 +97,12 @@ class TimerManager: ObservableObject {
         state == .paused ? pauseReason : nil
     }
 
-    init() {
+    init(meetingDetector: MeetingDetector = MeetingDetector(), defaults: UserDefaults = .standard,
+         startAutomatically: Bool = true) {
+        self.meetingDetector = meetingDetector
+        self.defaults = defaults
         // Register defaults
-        UserDefaults.standard.register(defaults: [
+        defaults.register(defaults: [
             SettingsKey.workDurationMinutes: 20,
             SettingsKey.breakDurationSeconds: 20,
             SettingsKey.pauseDuringMeetings: true,
@@ -109,6 +113,7 @@ class TimerManager: ObservableObject {
         // Start timer and ticker (ticker runs for app lifetime)
         remainingSeconds = workDurationSeconds
         state = .working
+        guard startAutomatically else { return }
         startTicking()
 
         // Reset work timer on wake — sleep time isn't work time
@@ -187,9 +192,12 @@ class TimerManager: ObservableObject {
     private func tick() {
         tickCount += 1
 
-        // Check for meetings and idle every 5 seconds
+        // Re-read capture activity every second so hanging up clears promptly.
+        // Also release a meeting pause if the user disabled meeting detection.
+        checkMeetingStatus()
+
+        // Idle detection is less time-sensitive.
         if tickCount % 5 == 0 {
-            if pauseDuringMeetings { checkMeetingStatus() }
             if pauseWhenIdle { checkIdleStatus() }
         }
 
@@ -237,6 +245,10 @@ class TimerManager: ObservableObject {
     }
 
     private func checkMeetingStatus() {
+        guard pauseDuringMeetings else {
+            if state == .paused && pauseReason == .meeting { resume() }
+            return
+        }
         meetingDetector.check()
 
         if meetingDetector.isInMeeting {
@@ -258,6 +270,10 @@ class TimerManager: ObservableObject {
             }
         }
     }
+
+    #if TESTING
+    func tickForTesting() { tick() }
+    #endif
 
     // MARK: - Idle Detection
 

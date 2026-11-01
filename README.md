@@ -1,11 +1,11 @@
 <div align="center">
   <img src="assets/icon.png" width="128" height="128" alt="Repose icon"/>
-  <h1>Repose</h1>
-  <p><strong>Take breaks from your screen. Without interrupting your meetings.</strong></p>
-  <a href="https://github.com/fikrikarim/repose/releases/latest/download/Repose.dmg">
+  <h1>Repose Ring</h1>
+  <p><strong>A graphical countdown for your next screen break.</strong></p>
+  <a href="https://github.com/codievilky/repose/releases/latest">
     <img src="assets/download-button.svg" alt="Download for Mac">
   </a>
-  <p><sub>Free and open source. Requires macOS 13+.</sub></p>
+  <p><sub>Free and open source. Release download: Apple Silicon, macOS 13+.</sub></p>
 </div>
 
 <br/>
@@ -16,14 +16,24 @@
 
 <br/>
 
-Repose lives in your menu bar, counts down your work interval, and dims your screen when it's time to rest your eyes. When the break ends, the cycle starts again.
+Repose Ring is a fork of [Repose by Fikri Karim](https://github.com/fikrikarim/repose),
+with a compact graphical menu-bar countdown and improved meeting-pause recovery.
+The original author and MIT license are retained.
 
-The difference from every other break reminder: **Repose detects when you're in a meeting and stays out of your way.** No calendar integration, no app-specific setup. If your camera or mic is active, it knows you're on a call and waits.
+The ring shrinks as your work interval runs out. Its center shows pause bars for
+manual pauses, a moon for idle time, a video camera for meetings, and a dot during
+breaks. Hover for the exact time, or click for the existing settings menu.
+
+![Menu-bar countdown and state icons in light and dark appearances](assets/menu-bar-ring-preview.png)
+
+Repose Ring dims your screens when it's time to rest. Camera or microphone activity
+automatically pauses reminders; no calendar setup is required. Audio capture is a
+meeting heuristic, so other recording apps can also pause reminders.
 
 ## How it works
 
 1. Set your work interval (5–60 min) and break duration (20 sec–5 min)
-2. A countdown appears in your menu bar
+2. A shrinking ring appears in your menu bar; hover to see the exact countdown
 3. When time's up, your screen dims with a gentle reminder to look away
 4. If you're on a call, the timer pauses automatically until you're done
 5. If you step away from your computer, the timer pauses and resets when you return
@@ -40,7 +50,9 @@ Most break apps check your calendar or look for specific apps running. Both brea
 
 Repose checks the hardware directly. It uses CoreMediaIO to detect active cameras and CoreAudio for microphones. If something is using your camera or mic right now, you're probably in a call, so it backs off.
 
-This means it works with Zoom, Meet, FaceTime, Teams, Slack huddles, and whatever you end up using next year. Zero configuration.
+Camera/microphone detection is app-independent. Meeting-state regressions are
+covered by deterministic tests; the latest FaceTime hang-up fix still needs
+validation in a real call.
 
 ## Smart idle detection
 
@@ -50,16 +62,62 @@ It's smart about passive screen use too: if you're watching a video (where apps 
 
 ## Install
 
+### Local ring variant
+
+This checkout replaces the menu-bar text countdown with a compact monochrome
+ring. The ring shrinks as time runs out and holds its position while paused.
+The center shows pause bars for manual pauses, a moon for idle time, a video
+camera for meetings, and a dot during breaks. Hover for the countdown or pause
+status; the existing menu remains available.
+
+On macOS 14.2+, microphone detection checks active audio input per process,
+so output-only activity on a duplex headset does not prolong the meeting pause.
+Meeting activity is polled every second; ending capture or disabling Pause
+During Meetings releases the pause. macOS 13–14.1 retains the device heuristic.
+
+Run deterministic meeting-state regressions with `bash scripts/test-meetings.sh`
+(the same `REPOSE_SDK_PATH` override described below applies).
+
+To build with macOS Command Line Tools (no full Xcode or dependencies required):
+
+```sh
+bash scripts/build-local.sh
+open "${TMPDIR:-/tmp/}repose-ring-build/Repose Ring.app"
+```
+
+If a macOS 27 Command Line Tools SDK reports a missing `SwiftUIMacros` plugin,
+select an installed older SDK, for example:
+
+```sh
+REPOSE_SDK_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk bash scripts/build-local.sh
+```
+
+Build artifacts and a portable ZIP are written to the temporary build directory
+printed by the script. Set `REPOSE_BUILD_DIR` to override it; avoid iCloud-managed
+folders when signing an app bundle.
+
+The script creates a separately identified **Repose Ring** app with upstream
+updates disabled so they cannot overwrite this modification. Quit the official
+Repose before opening this build to avoid duplicate reminders. This local build
+uses its own preferences; configure your intervals from its menu.
+
 ### Download
 
-[Download the latest DMG](https://github.com/fikrikarim/repose/releases/latest/download/Repose.dmg), open it, and drag Repose to Applications.
+[Download the latest ZIP](https://github.com/codievilky/repose/releases/latest),
+unzip it, and drag **Repose Ring.app** to Applications. The published binary is
+for Apple Silicon (M-series) Macs running macOS 13 or later.
 
-Updates are handled automatically via Sparkle.
+Personal builds are ad-hoc signed, not Apple notarized. On first launch, macOS
+may require approval in System Settings → Privacy & Security. Upstream automatic
+updates are disabled in the packaged fork so they cannot replace this variant.
 
-### Build from source
+### Upstream Xcode project
+
+For this fork's packaged variant, use `scripts/build-local.sh` above. The original
+Xcode project is retained for upstream development (Xcode 15+, Sparkle dependency):
 
 ```
-git clone https://github.com/fikrikarim/repose.git
+git clone https://github.com/codievilky/repose.git
 cd repose
 brew install xcodegen
 xcodegen generate
@@ -70,4 +128,4 @@ Requires Xcode 15+ and macOS 13+.
 
 ## License
 
-MIT
+MIT. Original copyright © 2026 Fikri Karim; see [LICENSE](LICENSE).

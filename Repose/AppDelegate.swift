@@ -1,13 +1,17 @@
 import AppKit
 import ServiceManagement
+#if !LOCAL_BUILD
 import Sparkle
+#endif
 import SwiftUI
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var timerManager: TimerManager!
+    #if !LOCAL_BUILD
     private var updaterController: SPUStandardUpdaterController!
+    #endif
     private var statusBarTimer: Timer?
     private var menuIsOpen = false
 
@@ -32,11 +36,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         timerManager = TimerManager()
+        #if !LOCAL_BUILD
         updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        #endif
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "timer", accessibilityDescription: "Repose")
-        statusItem.button?.imagePosition = .imageLeading
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.imagePosition = .imageOnly
 
         buildMenu()
         startStatusBarTimer()
@@ -125,9 +130,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
+        // An upstream update would replace a locally customized build.
+        #if !LOCAL_BUILD
         let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         updateItem.target = updaterController
         menu.addItem(updateItem)
+        #endif
 
         menu.addItem(.separator())
 
@@ -201,7 +209,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         launchAtLoginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
-    // MARK: - Status bar title updates
+    // MARK: - Status bar progress updates
 
     private func startStatusBarTimer() {
         updateStatusBarTitle()
@@ -221,20 +229,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateStatusBarTitle() {
-        let icon: String
-        switch timerManager.state {
-        case .working: icon = "timer"
-        case .onBreak: icon = "cup.and.saucer.fill"
-        case .paused:
-            switch timerManager.currentPauseReason {
-            case .meeting: icon = "video.fill"
-            case .idle: icon = "moon.zzz"
-            default: icon = "pause.circle"
-            }
-        }
-
-        statusItem.button?.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
-        statusItem.button?.title = " \(timerManager.menuBarText)"
+        guard let button = statusItem.button else { return }
+        let duration = timerManager.state == .onBreak
+            ? timerManager.breakDurationSeconds
+            : timerManager.workDurationSeconds
+        let progress = Double(timerManager.remainingSeconds) / Double(max(duration, 1))
+        button.title = ""
+        button.image = MenuBarProgressIcon.image(
+            remainingFraction: progress,
+            pauseReason: timerManager.currentPauseReason,
+            onBreak: timerManager.state == .onBreak
+        )
+        let status = "Repose — \(timerManager.menuBarText)"
+        button.toolTip = status
+        button.setAccessibilityLabel("Repose")
+        button.setAccessibilityValue(timerManager.menuBarText)
     }
 
     // MARK: - Actions
@@ -303,5 +312,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             return "\(seconds / 60) min"
         }
+    }
+}
+
+/// A monochrome template image follows the menu bar's light/dark appearance.
+enum MenuBarProgressIcon {
+    static func image(remainingFraction: Double, pauseReason: PauseReason? = nil, onBreak: Bool = false) -> NSImage {
+        let fraction = remainingFraction.isFinite ? min(max(remainingFraction, 0), 1) : 0
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let bounds = NSRect(x: 2, y: 2, width: 14, height: 14)
+            let track = NSBezierPath(ovalIn: bounds)
+            track.lineWidth = 2
+            NSColor.black.withAlphaComponent(0.25).setStroke()
+            track.stroke()
+
+            NSColor.black.setStroke()
+            if fraction >= 1 {
+                track.stroke()
+            } else if fraction > 0 {
+                let arc = NSBezierPath()
+                arc.lineWidth = 2
+                arc.lineCapStyle = .round
+                // The remaining arc starts at twelve o'clock, clockwise.
+                arc.appendArc(withCenter: NSPoint(x: 9, y: 9), radius: 7,
+                              startAngle: 90, endAngle: 90 - CGFloat(fraction * 360), clockwise: true)
+                arc.stroke()
+            }
+
+            NSColor.black.setFill()
+            switch pauseReason {
+            case .manual:
+                NSBezierPath(roundedRect: NSRect(x: 6, y: 6, width: 2, height: 6),
+                             xRadius: 0.5, yRadius: 0.5).fill()
+                NSBezierPath(roundedRect: NSRect(x: 10, y: 6, width: 2, height: 6),
+                             xRadius: 0.5, yRadius: 0.5).fill()
+            case .idle, .meeting:
+                let symbolName = pauseReason == .idle ? "moon.fill" : "video.fill"
+                let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
+                if let symbol {
+                    // Preserve SF Symbol proportions inside the ring's clear center.
+                    let scale = min(9 / symbol.size.width, 8 / symbol.size.height)
+                    let size = NSSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
+                    symbol.draw(in: NSRect(x: 9 - size.width / 2, y: 9 - size.height / 2,
+                                           width: size.width, height: size.height))
+                }
+            case nil:
+                if onBreak {
+                    NSBezierPath(ovalIn: NSRect(x: 7, y: 7, width: 4, height: 4)).fill()
+                }
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }
