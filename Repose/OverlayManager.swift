@@ -39,16 +39,11 @@ class OverlayManager {
             overlayWindows.append(panel)
         }
 
-        // Install escape key handler to skip break
-        let allowSkip = UserDefaults.standard.bool(forKey: SettingsKey.allowSkipBreak)
-        if allowSkip {
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.keyCode == 53 { // Escape
-                    timerManager.skipBreak()
-                    return nil
-                }
-                return event
-            }
+        // Completed breaks always accept Return / keypad Enter / Escape,
+        // independently of the setting that permits skipping unfinished breaks.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if timerManager.handleBreakKey(event.keyCode, isRepeat: event.isARepeat) { return nil }
+            return event
         }
     }
 

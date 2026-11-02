@@ -38,7 +38,7 @@ meeting heuristic, so other recording apps can also pause reminders.
 4. If you're on a call, the timer pauses automatically until you're done
 5. If you step away from your computer, the timer pauses and resets when you return
 6. Locking the screen pauses work; unlocking resets the full work interval
-7. A finished break stays black until you click **Confirm & Continue** (or press Return)
+7. A finished break stays black until you click **Confirm & Continue** (or press Enter / Esc)
 
 <div align="center">
   <img src="assets/menu.png" alt="Repose menu" width="280"/>
@@ -82,7 +82,9 @@ During Meetings releases the pause. macOS 13–14.1 retains the device heuristic
 Completed breaks stay opaque black with **Confirm & Continue**, even after sleep,
 unlock, or new audio activity. Confirmation starts a full new work interval.
 Manual pauses stay paused after unlocking. An unfinished break can still be
-skipped when **Allow Skip Break** is enabled.
+skipped with Esc when **Allow Skip Break** is enabled. Once the break is complete,
+Enter and Esc both confirm even when early skipping is disabled. Held-key repeats
+cannot automatically confirm as the countdown ends.
 
 Run deterministic meeting-state regressions with `bash scripts/test-meetings.sh`
 (the same `REPOSE_SDK_PATH` override described below applies).

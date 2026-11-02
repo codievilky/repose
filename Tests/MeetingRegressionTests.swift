@@ -241,5 +241,38 @@ struct MeetingRegressionTests {
         precondition(racing.isAwaitingBreakConfirmation && racing.overlayManager.dismissals == 0)
         detector.capturing = false
         print("PASS: crossing the deadline during capture detection still requires confirmation")
+
+        defaults.set(false, forKey: SettingsKey.allowSkipBreak)
+        for key: UInt16 in [36, 76, 53] {
+            let keyboard = TimerManager(meetingDetector: detector, defaults: defaults, startAutomatically: false, now: { clock })
+            for _ in 0..<60 { keyboard.tickForTesting() }
+            clock.addTimeInterval(TimeInterval(keyboard.breakDurationSeconds))
+            // Refreshing the deadline is part of key handling, even before the next tick.
+            precondition(keyboard.handleBreakKey(key))
+            precondition(keyboard.state == .working && keyboard.remainingSeconds == 60)
+            precondition(keyboard.overlayManager.confirmations == 1)
+        }
+        print("PASS: Return, keypad Enter and Esc confirm completed breaks with early skipping disabled")
+
+        let early = TimerManager(meetingDetector: detector, defaults: defaults, startAutomatically: false, now: { clock })
+        for _ in 0..<60 { early.tickForTesting() }
+        precondition(!early.handleBreakKey(36) && !early.handleBreakKey(53))
+        precondition(early.state == .onBreak && !early.isAwaitingBreakConfirmation)
+        defaults.set(true, forKey: SettingsKey.allowSkipBreak)
+        precondition(early.handleBreakKey(53) && early.state == .working)
+        precondition(early.overlayManager.dismissals == 1 && early.overlayManager.confirmations == 0)
+        print("PASS: Esc before the deadline respects the Allow Skip Break setting")
+
+        defaults.set(false, forKey: SettingsKey.allowSkipBreak)
+        let held = TimerManager(meetingDetector: detector, defaults: defaults, startAutomatically: false, now: { clock })
+        for _ in 0..<60 { held.tickForTesting() }
+        clock.addTimeInterval(TimeInterval(held.breakDurationSeconds))
+        precondition(held.handleBreakKey(53, isRepeat: true))
+        precondition(held.isAwaitingBreakConfirmation && held.overlayManager.confirmations == 0)
+        held.handleScreenLock()
+        precondition(!held.handleBreakKey(53) && held.isAwaitingBreakConfirmation)
+        held.handleScreenUnlock()
+        precondition(held.handleBreakKey(53) && held.overlayManager.confirmations == 1)
+        print("PASS: held keys and locked-screen keys cannot confirm automatically; a fresh press can")
     }
 }

@@ -114,7 +114,8 @@ struct BreakOverlayView: View {
                         }
                         .buttonStyle(.plain)
                         .keyboardShortcut(.defaultAction)
-                        .accessibilityHint("Starts a full new work interval")
+                        .accessibilityHint("Press Enter or Escape to start a full new work interval")
+                        .help("Enter or Esc confirms and starts the next work interval")
                     } else if allowSkipBreak {
                         Button(action: { timerManager.skipBreak() }) {
                             HStack(spacing: 10) {

@@ -234,6 +234,23 @@ class TimerManager: ObservableObject {
         checkMeetingStatus()
     }
 
+    @discardableResult
+    func handleBreakKey(_ keyCode: UInt16, isRepeat: Bool = false) -> Bool {
+        guard state == .onBreak, !screenIsLocked, [36, 76, 53].contains(keyCode) else { return false }
+        refreshBreakCountdown()
+        // Holding a key through the deadline must not confirm automatically.
+        guard !isRepeat else { return true }
+        if isAwaitingBreakConfirmation {
+            confirmBreak()
+            return true
+        }
+        if keyCode == 53 && defaults.bool(forKey: SettingsKey.allowSkipBreak) {
+            skipBreak()
+            return true
+        }
+        return false
+    }
+
     func refreshMeetingStatus() {
         refreshBreakCountdown()
         guard !screenIsLocked, !isAwaitingBreakConfirmation else { return }
