@@ -126,6 +126,36 @@ Personal builds are ad-hoc signed, not Apple notarized. On first launch, macOS
 may require approval in System Settings → Privacy & Security. Upstream automatic
 updates are disabled in the packaged fork so they cannot replace this variant.
 
+### One-click updater (free)
+
+Download **Repose-Ring-Updater.zip** from the release assets, unzip it, and run
+**Repose-Ring-Update.command**. The script fetches
+the latest release from `codievilky/repose`, checks its SHA-256, code signature,
+bundle identity, version and architecture, then backs up and replaces only
+**Repose Ring.app**. It preserves preferences and restarts the app. It uses only
+built-in macOS tools; Python and Xcode are not required.
+
+After verification, the script removes **only this app's** `com.apple.quarantine`
+download marker. It does not disable Gatekeeper globally or clear other apps'
+attributes. This is a local exception for this personal build, not Apple
+notarization or a guarantee of safety. Backups are retained in
+`~/Library/Application Support/Repose Ring/Backups`.
+
+The updater itself may need one-time approval on another Mac; reuse that same
+script for later app releases. You can also invoke it explicitly from Terminal:
+
+```sh
+/bin/bash "$HOME/Downloads/Repose-Ring-Update.command"
+```
+
+For an integrity-only check, append `--check-only`; it does not install, launch,
+or remove quarantine. Offline use accepts `--package ZIP --checksum SHA256SUMS.txt`.
+Developers can run the install/rollback regressions with:
+
+```sh
+python3 Tests/test_updater.py /path/to/Repose-Ring-VERSION-AppleSilicon.zip
+```
+
 ### Upstream Xcode project
 
 For this fork's packaged variant, use `scripts/build-local.sh` above. The original

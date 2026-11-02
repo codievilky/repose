@@ -4,5 +4,6 @@ xcuserdata/
 DerivedData/
 build/
 .DS_Store
+__pycache__/
 repose-break-overlay.png
 repose-menu.png
