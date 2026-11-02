@@ -11,7 +11,7 @@
 <br/>
 
 <div align="center">
-  <img src="assets/break-overlay.png" alt="Repose break screen" width="480"/>
+  <img src="assets/break-complete.png" alt="A completed break stays black until confirmation" width="480"/>
 </div>
 
 <br/>
@@ -37,6 +37,8 @@ meeting heuristic, so other recording apps can also pause reminders.
 3. When time's up, your screen dims with a gentle reminder to look away
 4. If you're on a call, the timer pauses automatically until you're done
 5. If you step away from your computer, the timer pauses and resets when you return
+6. Locking the screen pauses work; unlocking resets the full work interval
+7. A finished break stays black until you click **Confirm & Continue** (or press Return)
 
 <div align="center">
   <img src="assets/menu.png" alt="Repose menu" width="280"/>
@@ -71,12 +73,23 @@ camera for meetings, and a dot during breaks. Hover for the countdown or pause
 status; the existing menu remains available.
 
 On macOS 14.2+, microphone detection checks active audio input per process,
-so output-only activity on a duplex headset does not prolong the meeting pause.
+and requires an actual hardware microphone input. System-audio-only capture and
+virtual loopback devices do not count as meetings. The menu and hover text name
+the detected microphone app or camera when available.
 Meeting activity is polled every second; ending capture or disabling Pause
 During Meetings releases the pause. macOS 13–14.1 retains the device heuristic.
 
+Completed breaks stay opaque black with **Confirm & Continue**, even after sleep,
+unlock, or new audio activity. Confirmation starts a full new work interval.
+Manual pauses stay paused after unlocking. An unfinished break can still be
+skipped when **Allow Skip Break** is enabled.
+
 Run deterministic meeting-state regressions with `bash scripts/test-meetings.sh`
 (the same `REPOSE_SDK_PATH` override described below applies).
+
+For troubleshooting, `~/Library/Application Support/Repose Ring/status.json`
+contains the running app version, timer state, and detected capture source. This
+local status contains no audio, images, or screen content and is not uploaded.
 
 To build with macOS Command Line Tools (no full Xcode or dependencies required):
 

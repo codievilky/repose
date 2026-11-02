@@ -29,6 +29,7 @@ enum SettingsKey {
 class TimerManager: ObservableObject {
     @Published var state: TimerState = .working
     @Published var remainingSeconds: Int = 0
+    private(set) var screenIsLocked = false
 
     private var timerCancellable: AnyCancellable?
     private var tickCount: Int = 0
@@ -38,6 +39,12 @@ class TimerManager: ObservableObject {
     let meetingDetector: MeetingDetector
     let overlayManager = OverlayManager()
     private let defaults: UserDefaults
+    private let now: () -> Date
+    private var breakDeadline: Date?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var screenObservers: [NSObjectProtocol] = []
+
+    var isAwaitingBreakConfirmation: Bool { state == .onBreak && remainingSeconds == 0 }
 
     // Activity to prevent App Nap
     private var activity: NSObjectProtocol?
@@ -68,7 +75,7 @@ class TimerManager: ObservableObject {
         case .working:
             return formatTime(remainingSeconds)
         case .onBreak:
-            return "Break \(formatTime(remainingSeconds))"
+            return isAwaitingBreakConfirmation ? "Break complete — confirm to continue" : "Break \(formatTime(remainingSeconds))"
         case .paused:
             switch pauseReason {
             case .meeting:
@@ -98,9 +105,10 @@ class TimerManager: ObservableObject {
     }
 
     init(meetingDetector: MeetingDetector = MeetingDetector(), defaults: UserDefaults = .standard,
-         startAutomatically: Bool = true) {
+         startAutomatically: Bool = true, now: @escaping () -> Date = Date.init) {
         self.meetingDetector = meetingDetector
         self.defaults = defaults
+        self.now = now
         // Register defaults
         defaults.register(defaults: [
             SettingsKey.workDurationMinutes: 20,
@@ -117,7 +125,7 @@ class TimerManager: ObservableObject {
         startTicking()
 
         // Reset work timer on wake — sleep time isn't work time
-        NSWorkspace.shared.notificationCenter.addObserver(
+        workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
@@ -125,6 +133,54 @@ class TimerManager: ObservableObject {
             Task { @MainActor in
                 self?.handleWake()
             }
+        })
+        observeScreenLock()
+    }
+
+    deinit {
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        for observer in screenObservers { DistributedNotificationCenter.default().removeObserver(observer) }
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+    }
+
+    private func observeScreenLock() {
+        let center = DistributedNotificationCenter.default()
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            screenObservers.append(center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    if locked { self?.handleScreenLock() } else { self?.handleScreenUnlock() }
+                }
+            })
+        }
+        // Fast user switching also suspends the current work session.
+        for (name, locked) in [(NSWorkspace.sessionDidResignActiveNotification, true),
+                               (NSWorkspace.sessionDidBecomeActiveNotification, false)] {
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    if locked { self?.handleScreenLock() } else { self?.handleScreenUnlock() }
+                }
+            })
+        }
+    }
+
+    func handleScreenLock() {
+        screenIsLocked = true
+    }
+
+    func handleScreenUnlock() {
+        guard screenIsLocked else { return }
+        screenIsLocked = false
+        if state == .onBreak {
+            // Locking/sleeping is valid rest, but never substitutes for confirmation.
+            refreshBreakCountdown()
+            return
+        }
+        let manuallyPaused = state == .paused && pauseReason == .manual
+        remainingSeconds = workDurationSeconds
+        secondsBeforePause = workDurationSeconds
+        if !manuallyPaused {
+            state = .working
+            checkMeetingStatus()
         }
     }
 
@@ -133,15 +189,15 @@ class TimerManager: ObservableObject {
         case .working:
             remainingSeconds = workDurationSeconds
         case .onBreak:
-            overlayManager.dismissOverlay()
-            remainingSeconds = workDurationSeconds
-            state = .working
+            refreshBreakCountdown()
         case .paused:
             break
         }
     }
 
     func start() {
+        guard state != .onBreak else { return }
+        breakDeadline = nil
         remainingSeconds = workDurationSeconds
         state = .working
     }
@@ -161,9 +217,27 @@ class TimerManager: ObservableObject {
     }
 
     func skipBreak() {
+        refreshBreakCountdown()
+        guard state == .onBreak, !isAwaitingBreakConfirmation else { return }
         overlayManager.dismissOverlay()
+        breakDeadline = nil
         remainingSeconds = workDurationSeconds
         state = .working
+    }
+
+    func confirmBreak() {
+        guard isAwaitingBreakConfirmation, !screenIsLocked else { return }
+        overlayManager.dismissWithAnimation()
+        breakDeadline = nil
+        remainingSeconds = workDurationSeconds
+        state = .working
+        checkMeetingStatus()
+    }
+
+    func refreshMeetingStatus() {
+        refreshBreakCountdown()
+        guard !screenIsLocked, !isAwaitingBreakConfirmation else { return }
+        checkMeetingStatus()
     }
 
     func togglePause() {
@@ -191,6 +265,12 @@ class TimerManager: ObservableObject {
 
     private func tick() {
         tickCount += 1
+        refreshBreakCountdown()
+        // A finished break stays black until the explicit confirmation action.
+        guard !isAwaitingBreakConfirmation else { return }
+        if screenIsLocked {
+            return
+        }
 
         // Re-read capture activity every second so hanging up clears promptly.
         // Also release a meeting pause if the user disabled meeting detection.
@@ -212,10 +292,7 @@ class TimerManager: ObservableObject {
             }
 
         case .onBreak:
-            remainingSeconds -= 1
-            if remainingSeconds <= 0 {
-                endBreak()
-            }
+            break // Refreshed from the wall-clock deadline at the start of this tick.
         }
     }
 
@@ -232,16 +309,23 @@ class TimerManager: ObservableObject {
         }
 
         remainingSeconds = breakDurationSeconds
+        breakDeadline = now().addingTimeInterval(TimeInterval(remainingSeconds))
         state = .onBreak
         overlayManager.showBreakOverlay(timerManager: self)
         if !muteSounds { NSSound(named: "Glass")?.play() }
     }
 
     private func endBreak() {
+        guard remainingSeconds > 0 else { return }
+        remainingSeconds = 0
         if !muteSounds { NSSound(named: "Blow")?.play() }
-        overlayManager.dismissWithAnimation()
-        remainingSeconds = workDurationSeconds
-        state = .working
+        // Keep the overlay and .onBreak state until confirmBreak().
+    }
+
+    private func refreshBreakCountdown() {
+        guard state == .onBreak, !isAwaitingBreakConfirmation, let deadline = breakDeadline else { return }
+        let remaining = max(0, Int(ceil(deadline.timeIntervalSince(now()))))
+        if remaining == 0 { endBreak() } else { remainingSeconds = remaining }
     }
 
     private func checkMeetingStatus() {
@@ -259,6 +343,8 @@ class TimerManager: ObservableObject {
             } else if state == .onBreak {
                 // If a meeting starts during a break, skip the break
                 skipBreak()
+                // The deadline may have elapsed while capture was being read.
+                guard state == .working else { return }
                 secondsBeforePause = remainingSeconds
                 state = .paused
                 pauseReason = .meeting
@@ -273,6 +359,7 @@ class TimerManager: ObservableObject {
 
     #if TESTING
     func tickForTesting() { tick() }
+    func wakeForTesting() { handleWake() }
     #endif
 
     // MARK: - Idle Detection

@@ -1,22 +1,32 @@
 import Foundation
 import Combine
+import AppKit
 import CoreMediaIO
 import CoreAudio
+
+struct AudioInputCapture {
+    let name: String
+    let devices: [AudioDeviceID]
+}
 
 class MeetingDetector: ObservableObject {
     @Published var isInMeeting: Bool = false
     @Published var meetingSource: String? = nil
+    private var microphoneSource: String?
+    private var cameraSource: String?
 
     func check() {
+        microphoneSource = nil
+        cameraSource = nil
         let cameraActive = checkCamera()
         let micActive = checkMicrophone()
 
         if cameraActive {
             isInMeeting = true
-            meetingSource = "Camera in use"
+            meetingSource = cameraSource.map { "Camera in use — \($0)" } ?? "Camera in use"
         } else if micActive {
             isInMeeting = true
-            meetingSource = "Microphone in use"
+            meetingSource = microphoneSource.map { "Microphone in use — \($0)" } ?? "Microphone in use"
         } else {
             isInMeeting = false
             meetingSource = nil
@@ -59,11 +69,23 @@ class MeetingDetector: ObservableObject {
 
         for device in devices {
             if isDeviceRunning(device) {
+                cameraSource = cameraName(device)
                 return true
             }
         }
 
         return false
+    }
+
+    private func cameraName(_ device: CMIODeviceID) -> String? {
+        var address = CMIOObjectPropertyAddress(mSelector: CMIOObjectPropertySelector(kCMIOObjectPropertyName),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal), mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+        var name: Unmanaged<CFString>?
+        var used: UInt32 = 0
+        let status = CMIOObjectGetPropertyData(device, &address, 0, nil,
+            UInt32(MemoryLayout<Unmanaged<CFString>?>.size), &used, &name)
+        guard status == noErr else { return nil }
+        return name?.takeRetainedValue() as String?
     }
 
     private func isDeviceRunning(_ deviceID: CMIODeviceID) -> Bool {
@@ -106,6 +128,16 @@ class MeetingDetector: ObservableObject {
 
     @available(macOS 14.2, *)
     func checkProcessInputs() -> Bool? {
+        guard let captures = activeAudioInputs() else { return nil }
+        for capture in captures where capture.devices.contains(where: isMicrophoneDevice) {
+            microphoneSource = capture.name
+            return true
+        }
+        return false
+    }
+
+    @available(macOS 14.2, *)
+    func activeAudioInputs() -> [AudioInputCapture]? {
         let system = AudioObjectID(kAudioObjectSystemObject)
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -114,8 +146,9 @@ class MeetingDetector: ObservableObject {
         )
         // Only fall back to the device heuristic when the API is unavailable.
         guard AudioObjectHasProperty(system, &address) else { return nil }
-        guard let processes = audioObjects(system, address: &address) else { return false }
+        guard let processes = audioObjects(system, address: &address) else { return [] }
 
+        var captures: [AudioInputCapture] = []
         for process in processes {
             var inputAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioProcessPropertyIsRunningInput,
@@ -126,9 +159,51 @@ class MeetingDetector: ObservableObject {
             var size = UInt32(MemoryLayout<UInt32>.size)
             let result = AudioObjectGetPropertyData(process, &inputAddress, 0, nil, &size, &running)
             // A process may disappear between enumeration and reading it.
-            if result == noErr && running != 0 { return true }
+            guard result == noErr && running != 0 else { continue }
+            var devicesAddress = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyDevices,
+                mScope: kAudioObjectPropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
+            let devices = audioObjects(process, address: &devicesAddress) ?? []
+            let pid = number(process, selector: kAudioProcessPropertyPID).map { pid_t(bitPattern: $0) }
+            let name = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
+                ?? string(process, selector: kAudioProcessPropertyBundleID) ?? "Audio input"
+            captures.append(AudioInputCapture(name: name, devices: devices))
         }
-        return false
+        return captures
+    }
+
+    func isMicrophoneDevice(_ device: AudioDeviceID) -> Bool {
+        isMicrophoneDevice(device, visited: [])
+    }
+
+    private func isMicrophoneDevice(_ device: AudioDeviceID, visited: Set<AudioDeviceID>) -> Bool {
+        guard !visited.contains(device), visited.count < 32, isInputDevice(device),
+              let transport = number(device, selector: kAudioDevicePropertyTransportType) else { return false }
+        if transport == kAudioDeviceTransportTypeVirtual { return false }
+        if transport == kAudioDeviceTransportTypeAggregate || transport == kAudioDeviceTransportTypeAutoAggregate {
+            var address = AudioObjectPropertyAddress(mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            let children = audioObjects(device, address: &address) ?? []
+            return children.contains { isMicrophoneDevice($0, visited: visited.union([device])) }
+        }
+        // System-audio taps and loopback capture are not microphone input.
+        return true
+    }
+
+    private func number(_ object: AudioObjectID, selector: AudioObjectPropertySelector) -> UInt32? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? value : nil
+    }
+
+    private func string(_ object: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value?.takeRetainedValue() as String?
     }
 
     private func audioObjects(_ object: AudioObjectID, address: inout AudioObjectPropertyAddress) -> [AudioObjectID]? {

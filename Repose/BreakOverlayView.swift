@@ -15,12 +15,11 @@ struct BreakOverlayView: View {
 
     var body: some View {
         ZStack {
-            // Blurred dark background — semi-transparent
-            Color.black.opacity(0.75)
+            // Opaque black stays in place after the countdown until confirmation.
+            Color.black
                 .ignoresSafeArea()
-                .background(.ultraThinMaterial)
 
-            if isPrimary {
+            if isPrimary || timerManager.isAwaitingBreakConfirmation {
                 // Ambient glow behind the content
                 Circle()
                     .fill(
@@ -73,36 +72,58 @@ struct BreakOverlayView: View {
                             .scaleEffect(breathe ? 1.05 : 0.97)
 
                         // Timer inside the ring
-                        Text(formatTime(timerManager.remainingSeconds))
-                            .font(.system(size: 38, weight: .light, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .contentTransition(.numericText())
+                        if timerManager.isAwaitingBreakConfirmation {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 38, weight: .medium))
+                                .foregroundStyle(.white)
+                        } else {
+                            Text(formatTime(timerManager.remainingSeconds))
+                                .font(.system(size: 38, weight: .light, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .contentTransition(.numericText())
+                        }
                     }
 
                     VStack(spacing: 10) {
-                        Text("Time to Rest")
+                        Text(timerManager.isAwaitingBreakConfirmation ? "Break complete" : "Time to Rest")
                             .font(.system(size: 38, weight: .medium, design: .rounded))
                             .foregroundStyle(.white)
                             .opacity(appeared ? 1 : 0)
                             .offset(y: appeared ? 0 : 10)
 
-                        Text("Look away from the screen, stretch, and re-pose")
+                        Text(timerManager.isAwaitingBreakConfirmation
+                             ? "Take your time. Confirm when you're ready to work again."
+                             : "Look away from the screen, stretch, and re-pose")
                             .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(.white.opacity(0.4))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
                             .opacity(appeared ? 1 : 0)
                             .offset(y: appeared ? 0 : 8)
                     }
 
                     // Skip button
-                    if allowSkipBreak {
+                    if timerManager.isAwaitingBreakConfirmation {
+                        Button(action: { timerManager.confirmBreak() }) {
+                            Text("Confirm & Continue")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 28)
+                                .padding(.vertical, 12)
+                                .background(Color(red: 0.28, green: 0.36, blue: 0.78), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityHint("Starts a full new work interval")
+                    } else if allowSkipBreak {
                         Button(action: { timerManager.skipBreak() }) {
                             HStack(spacing: 10) {
                                 Text("Skip")
                                     .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.5))
+                                    .foregroundStyle(.white.opacity(0.65))
                                 Text("esc")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.25))
+                                    .foregroundStyle(.white.opacity(0.5))
                             }
                             .padding(.horizontal, 28)
                             .padding(.vertical, 10)
@@ -145,7 +166,7 @@ struct BreakOverlayView: View {
     private func updateRingProgress() {
         let total = CGFloat(timerManager.breakDurationSeconds)
         let remaining = CGFloat(timerManager.remainingSeconds)
-        let progress = total > 0 ? (total - remaining) / total : 0
+        let progress = total > 0 ? min(max((total - remaining) / total, 0), 1) : 0
         if reduceMotion {
             ringProgress = progress
         } else {

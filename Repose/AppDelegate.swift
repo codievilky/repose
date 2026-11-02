@@ -14,10 +14,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     #endif
     private var statusBarTimer: Timer?
     private var menuIsOpen = false
+    private var lastDiagnosticSignature = ""
+    private var lastDiagnosticWrite = Date.distantPast
 
     // Menu items that need updating
     private var statusMenuItem: NSMenuItem!
     private var pauseResumeMenuItem: NSMenuItem!
+    private var restartMenuItem: NSMenuItem!
+    private var confirmBreakMenuItem: NSMenuItem!
     private var workIntervalMenu: NSMenu!
     private var breakDurationMenu: NSMenu!
     private var pauseDuringMeetingsMenuItem: NSMenuItem!
@@ -58,6 +62,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
+        confirmBreakMenuItem = NSMenuItem(title: "Confirm & Continue", action: #selector(confirmBreak), keyEquivalent: "")
+        confirmBreakMenuItem.target = self
+        confirmBreakMenuItem.isHidden = true
+        menu.addItem(confirmBreakMenuItem)
+
         menu.addItem(.separator())
 
         // Pause / Resume
@@ -67,6 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let restartItem = NSMenuItem(title: "Restart Timer", action: #selector(restartTimer), keyEquivalent: "r")
         restartItem.target = self
+        restartMenuItem = restartItem
         menu.addItem(restartItem)
 
         menu.addItem(.separator())
@@ -151,6 +161,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     nonisolated func menuWillOpen(_ menu: NSMenu) {
         MainActor.assumeIsolated {
             menuIsOpen = true
+            timerManager.refreshMeetingStatus()
+            updateStatusBarTitle()
             updateMenuItems()
         }
     }
@@ -166,7 +178,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .working:
             statusMenuItem.title = "Next break in \(formatTime(timerManager.remainingSeconds))"
         case .onBreak:
-            statusMenuItem.title = "On a break"
+            statusMenuItem.title = timerManager.isAwaitingBreakConfirmation ? "Break complete — confirm to continue" : "On a break"
         case .paused:
             statusMenuItem.title = timerManager.pauseStatusText ?? "Paused"
         }
@@ -174,6 +186,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateMenuItems() {
         updateStatusText()
+        restartMenuItem.isEnabled = timerManager.state != .onBreak
+        confirmBreakMenuItem.isHidden = !timerManager.isAwaitingBreakConfirmation
 
         // Pause / Resume
         switch timerManager.state {
@@ -218,7 +232,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self else { return }
                 self.updateStatusBarTitle()
                 if self.menuIsOpen {
-                    self.updateStatusText()
+                    self.updateMenuItems()
                 }
             }
         }
@@ -240,10 +254,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pauseReason: timerManager.currentPauseReason,
             onBreak: timerManager.state == .onBreak
         )
-        let status = "Repose — \(timerManager.menuBarText)"
+        let source = timerManager.currentPauseReason == .meeting ? "\n\(timerManager.pauseStatusText ?? "")" : ""
+        let status = "Repose — \(timerManager.menuBarText)\(source)"
         button.toolTip = status
         button.setAccessibilityLabel("Repose")
         button.setAccessibilityValue(timerManager.menuBarText)
+        writeDiagnosticStatus()
+    }
+
+    private func writeDiagnosticStatus() {
+        let state = String(describing: timerManager.state)
+        let reason = timerManager.currentPauseReason.map { String(describing: $0) } ?? "none"
+        let source = timerManager.meetingDetector.meetingSource ?? "none"
+        let signature = "\(state)|\(reason)|\(source)|\(timerManager.screenIsLocked)|\(timerManager.isAwaitingBreakConfirmation)"
+        let date = Date()
+        guard signature != lastDiagnosticSignature || date.timeIntervalSince(lastDiagnosticWrite) >= 30 else { return }
+        let status: [String: Any] = [
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+            "state": state, "pauseReason": reason, "captureSource": source,
+            "remainingSeconds": timerManager.remainingSeconds,
+            "screenIsLocked": timerManager.screenIsLocked,
+            "awaitingConfirmation": timerManager.isAwaitingBreakConfirmation,
+            "sampledAt": ISO8601DateFormatter().string(from: date),
+        ]
+        do {
+            let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true).appendingPathComponent("Repose Ring", isDirectory: true)
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            let url = support.appendingPathComponent("status.json")
+            try JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys]).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            lastDiagnosticSignature = signature
+            lastDiagnosticWrite = date
+        } catch {
+            // Optional local diagnostics must never interrupt reminders.
+        }
     }
 
     // MARK: - Actions
@@ -254,6 +300,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func restartTimer() {
         timerManager.start()
+    }
+
+    @objc private func confirmBreak() {
+        timerManager.confirmBreak()
     }
 
     @objc private func setWorkInterval(_ sender: NSMenuItem) {
