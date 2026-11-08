@@ -76,6 +76,14 @@ On macOS 14.2+, microphone detection checks active audio input per process,
 and requires an actual hardware microphone input. System-audio-only capture and
 virtual loopback devices do not count as meetings. The menu and hover text name
 the detected microphone app or camera when available.
+Codex voice-input processes are excluded from microphone-based meeting detection.
+Browser microphone use is also excluded by default so ChatGPT voice and web
+dictation do not pause the timer. CoreAudio identifies the browser process, not
+the recording tab; Repose does not read browser tabs, URLs, or chat content.
+For audio-only web meetings, enable **Include Browser Microphones** under
+**Pause During Meetings** in the menu. This includes all microphone use in
+recognized browsers, including ChatGPT voice. Camera activity and microphone
+capture in native meeting apps still pause reminders automatically.
 Meeting activity is polled every second; ending capture or disabling Pause
 During Meetings releases the pause. macOS 13–14.1 retains the device heuristic.
 

@@ -7,13 +7,28 @@ import CoreAudio
 struct AudioInputCapture {
     let name: String
     let devices: [AudioDeviceID]
+    let bundleID: String?
+
+    init(name: String, devices: [AudioDeviceID], bundleID: String? = nil) {
+        self.name = name
+        self.devices = devices
+        self.bundleID = bundleID
+    }
 }
 
 class MeetingDetector: ObservableObject {
     @Published var isInMeeting: Bool = false
     @Published var meetingSource: String? = nil
+    var includeBrowserMicrophones = false
     private var microphoneSource: String?
     private var cameraSource: String?
+    private static let browserBundleIDs = [
+        "com.microsoft.edgemac", "com.google.Chrome", "com.apple.Safari",
+        "com.apple.SafariTechnologyPreview", "com.apple.WebKit",
+        "org.mozilla.firefox", "org.mozilla.nightly", "org.mozilla.firefoxdeveloperedition",
+        "com.brave.Browser", "company.thebrowser.Browser", "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera", "com.duckduckgo.macos.browser",
+    ]
 
     func check() {
         microphoneSource = nil
@@ -129,7 +144,16 @@ class MeetingDetector: ObservableObject {
     @available(macOS 14.2, *)
     func checkProcessInputs() -> Bool? {
         guard let captures = activeAudioInputs() else { return nil }
-        for capture in captures where capture.devices.contains(where: isMicrophoneDevice) {
+        // CoreAudio identifies the browser's audio helper, not the tab using it.
+        // Browser dictation/AI voice is therefore opt-in instead of a meeting
+        // signal by default. Codex voice input is always excluded.
+        let ignoredBundleIDs = ["com.openai.codex"] + (includeBrowserMicrophones ? [] : Self.browserBundleIDs)
+        for capture in captures {
+            if let bundleID = capture.bundleID,
+               ignoredBundleIDs.contains(where: { bundleID == $0 || bundleID.hasPrefix($0 + ".") }) {
+                continue
+            }
+            guard capture.devices.contains(where: isMicrophoneDevice) else { continue }
             microphoneSource = capture.name
             return true
         }
@@ -164,9 +188,10 @@ class MeetingDetector: ObservableObject {
                 mScope: kAudioObjectPropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
             let devices = audioObjects(process, address: &devicesAddress) ?? []
             let pid = number(process, selector: kAudioProcessPropertyPID).map { pid_t(bitPattern: $0) }
+            let bundleID = string(process, selector: kAudioProcessPropertyBundleID)
             let name = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
-                ?? string(process, selector: kAudioProcessPropertyBundleID) ?? "Audio input"
-            captures.append(AudioInputCapture(name: name, devices: devices))
+                ?? bundleID ?? "Audio input"
+            captures.append(AudioInputCapture(name: name, devices: devices, bundleID: bundleID))
         }
         return captures
     }

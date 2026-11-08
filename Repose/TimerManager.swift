@@ -20,6 +20,7 @@ enum SettingsKey {
     static let workDurationMinutes = "workDurationMinutes"
     static let breakDurationSeconds = "breakDurationSeconds"
     static let pauseDuringMeetings = "pauseDuringMeetings"
+    static let includeBrowserMicrophones = "includeBrowserMicrophones"
     static let allowSkipBreak = "allowSkipBreak"
     static let muteSounds = "muteSounds"
     static let pauseWhenIdle = "pauseWhenIdle"
@@ -114,6 +115,7 @@ class TimerManager: ObservableObject {
             SettingsKey.workDurationMinutes: 20,
             SettingsKey.breakDurationSeconds: 20,
             SettingsKey.pauseDuringMeetings: true,
+            SettingsKey.includeBrowserMicrophones: false,
             SettingsKey.allowSkipBreak: true,
             SettingsKey.muteSounds: false,
             SettingsKey.pauseWhenIdle: true,
@@ -316,7 +318,7 @@ class TimerManager: ObservableObject {
     private func startBreak() {
         // Check for meeting immediately before showing break overlay
         if pauseDuringMeetings {
-            meetingDetector.check()
+            refreshCaptureStatus()
             if meetingDetector.isInMeeting {
                 secondsBeforePause = workDurationSeconds
                 state = .paused
@@ -345,12 +347,17 @@ class TimerManager: ObservableObject {
         if remaining == 0 { endBreak() } else { remainingSeconds = remaining }
     }
 
+    private func refreshCaptureStatus() {
+        meetingDetector.includeBrowserMicrophones = defaults.bool(forKey: SettingsKey.includeBrowserMicrophones)
+        meetingDetector.check()
+    }
+
     private func checkMeetingStatus() {
         guard pauseDuringMeetings else {
             if state == .paused && pauseReason == .meeting { resume() }
             return
         }
-        meetingDetector.check()
+        refreshCaptureStatus()
 
         if meetingDetector.isInMeeting {
             if state == .working {
@@ -409,7 +416,7 @@ class TimerManager: ObservableObject {
 
         // Check for active meeting before resuming to avoid a gap
         if pauseDuringMeetings {
-            meetingDetector.check()
+            refreshCaptureStatus()
             if meetingDetector.isInMeeting {
                 secondsBeforePause = workDurationSeconds
                 pauseReason = .meeting

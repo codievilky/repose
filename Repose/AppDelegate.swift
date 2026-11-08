@@ -25,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var workIntervalMenu: NSMenu!
     private var breakDurationMenu: NSMenu!
     private var pauseDuringMeetingsMenuItem: NSMenuItem!
+    private var includeBrowserMicrophonesMenuItem: NSMenuItem!
     private var allowSkipMenuItem: NSMenuItem!
     private var pauseWhenIdleMenuItem: NSMenuItem!
     private var muteSoundsMenuItem: NSMenuItem!
@@ -112,6 +113,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pauseDuringMeetingsMenuItem.target = self
         pauseDuringMeetingsMenuItem.representedObject = SettingsKey.pauseDuringMeetings
         menu.addItem(pauseDuringMeetingsMenuItem)
+
+        includeBrowserMicrophonesMenuItem = NSMenuItem(title: "Include Browser Microphones", action: #selector(toggleBoolSetting(_:)), keyEquivalent: "")
+        includeBrowserMicrophonesMenuItem.target = self
+        includeBrowserMicrophonesMenuItem.representedObject = SettingsKey.includeBrowserMicrophones
+        includeBrowserMicrophonesMenuItem.indentationLevel = 1
+        includeBrowserMicrophonesMenuItem.toolTip = "Also pause for browser microphone use, including ChatGPT voice and audio-only web calls. Requires macOS 14.2 or later."
+        menu.addItem(includeBrowserMicrophonesMenuItem)
 
         pauseWhenIdleMenuItem = NSMenuItem(title: "Pause When Idle", action: #selector(toggleBoolSetting(_:)), keyEquivalent: "")
         pauseWhenIdleMenuItem.target = self
@@ -217,6 +225,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Toggle states
         pauseDuringMeetingsMenuItem.state = UserDefaults.standard.bool(forKey: SettingsKey.pauseDuringMeetings) ? .on : .off
+        includeBrowserMicrophonesMenuItem.state = UserDefaults.standard.bool(forKey: SettingsKey.includeBrowserMicrophones) ? .on : .off
+        if #available(macOS 14.2, *) {
+            includeBrowserMicrophonesMenuItem.isEnabled = pauseDuringMeetingsMenuItem.state == .on
+        } else {
+            includeBrowserMicrophonesMenuItem.isEnabled = false
+        }
         pauseWhenIdleMenuItem.state = UserDefaults.standard.bool(forKey: SettingsKey.pauseWhenIdle) ? .on : .off
         allowSkipMenuItem.state = UserDefaults.standard.bool(forKey: SettingsKey.allowSkipBreak) ? .on : .off
         muteSoundsMenuItem.state = UserDefaults.standard.bool(forKey: SettingsKey.muteSounds) ? .on : .off

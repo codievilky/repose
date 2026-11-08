@@ -26,7 +26,8 @@ class DuplexHeadsetDetector: MeetingDetector {
 @available(macOS 14.2, *)
 class CaptureDeviceDetector: MeetingDetector {
     var captures: [AudioInputCapture] = []
-    override func checkCamera() -> Bool { false }
+    var cameraRunning = false
+    override func checkCamera() -> Bool { cameraRunning }
     override func activeAudioInputs() -> [AudioInputCapture]? { captures }
     override func isMicrophoneDevice(_ device: AudioDeviceID) -> Bool { device == 1 }
 }
@@ -74,14 +75,71 @@ struct MeetingRegressionTests {
             devices.check()
             precondition(!devices.isInMeeting)
             print("PASS: system-audio capture without a physical microphone is not a meeting")
-            devices.captures.append(AudioInputCapture(name: "FaceTime", devices: [1]))
+            let codex = AudioInputCapture(name: "com.openai.codex.helper", devices: [1],
+                                          bundleID: "com.openai.codex.helper")
+            for bundleID in ["com.openai.codex", "com.openai.codex.helper", "com.openai.codex.helper.renderer"] {
+                devices.captures = [AudioInputCapture(name: "Voice input", devices: [1], bundleID: bundleID)]
+                devices.check()
+                precondition(!devices.isInMeeting && devices.meetingSource == nil)
+            }
+            print("PASS: Codex voice input on a physical microphone does not count as a meeting")
+            devices.captures = [codex, AudioInputCapture(name: "FaceTime", devices: [1], bundleID: "com.apple.FaceTime")]
             devices.check()
             precondition(devices.isInMeeting && devices.meetingSource == "Microphone in use — FaceTime")
-            print("PASS: actual microphone capture pauses and names its source")
+            print("PASS: an actual call still pauses and names its source while Codex is recording")
+            devices.captures = [codex]
+            devices.check()
+            precondition(!devices.isInMeeting && devices.meetingSource == nil)
+            print("PASS: hanging up clears the meeting even if Codex keeps the microphone running")
+            devices.cameraRunning = true
+            devices.check()
+            precondition(devices.isInMeeting && devices.meetingSource == "Camera in use")
+            devices.cameraRunning = false
+            print("PASS: camera activity still pauses while Codex microphone input is ignored")
+            for bundleID: String? in [nil, "us.zoom.xos", "com.tencent.xinWeChat", "com.openai.codex-other"] {
+                devices.captures = [AudioInputCapture(name: "Codex", devices: [1], bundleID: bundleID)]
+                devices.check()
+                precondition(devices.isInMeeting && devices.meetingSource == "Microphone in use — Codex")
+            }
+            print("PASS: other microphone apps are detected by identity, regardless of their display name")
             devices.captures = []
             devices.check()
             precondition(!devices.isInMeeting && devices.meetingSource == nil)
             print("PASS: capture sources clear when recording stops")
+
+            let browser = AudioInputCapture(name: "Edge voice input", devices: [1], bundleID: "com.microsoft.edgemac.helper")
+            for bundleID in ["com.microsoft.edgemac.helper", "com.google.Chrome.helper", "com.apple.Safari",
+                             "com.apple.WebKit.GPU", "org.mozilla.firefox"] {
+                devices.captures = [AudioInputCapture(name: "ChatGPT voice", devices: [1], bundleID: bundleID)]
+                devices.check()
+                precondition(!devices.isInMeeting && devices.meetingSource == nil)
+            }
+            print("PASS: browser microphone input does not count as a meeting by default")
+            devices.includeBrowserMicrophones = true
+            devices.captures = [codex, browser]
+            devices.check()
+            precondition(devices.isInMeeting && devices.meetingSource == "Microphone in use — Edge voice input")
+            devices.captures = [codex]
+            devices.check()
+            precondition(!devices.isInMeeting)
+            print("PASS: opting into browser microphones detects web calls while still excluding Codex")
+            devices.includeBrowserMicrophones = false
+            devices.captures = [browser, AudioInputCapture(name: "FaceTime", devices: [1], bundleID: "com.apple.FaceTime")]
+            devices.check()
+            precondition(devices.isInMeeting && devices.meetingSource == "Microphone in use — FaceTime")
+            devices.captures = [browser]
+            devices.check()
+            precondition(!devices.isInMeeting && devices.meetingSource == nil)
+            print("PASS: a native call pauses and clears correctly while browser voice input continues")
+            devices.cameraRunning = true
+            devices.check()
+            precondition(devices.isInMeeting && devices.meetingSource == "Camera in use")
+            devices.cameraRunning = false
+            print("PASS: browser video calls with an active camera still pause automatically")
+            devices.captures = [AudioInputCapture(name: "Edge", devices: [1], bundleID: "com.microsoft.edgemac-other")]
+            devices.check()
+            precondition(devices.isInMeeting)
+            print("PASS: browser exclusions respect bundle identity boundaries")
         }
 
         let suite = "ReposeMeetingTests.\(UUID().uuidString)"
@@ -90,6 +148,41 @@ struct MeetingRegressionTests {
         defaults.set(false, forKey: SettingsKey.pauseWhenIdle)
         defaults.set(true, forKey: SettingsKey.muteSounds)
         defaults.set(1, forKey: SettingsKey.workDurationMinutes)
+        if #available(macOS 14.2, *) {
+            let inputs = CaptureDeviceDetector()
+            let codex = AudioInputCapture(name: "Codex voice input", devices: [1], bundleID: "com.openai.codex.helper")
+            inputs.captures = [codex]
+            let inputTimer = TimerManager(meetingDetector: inputs, defaults: defaults, startAutomatically: false)
+            inputTimer.tickForTesting()
+            precondition(inputTimer.state == .working && inputTimer.remainingSeconds == 59)
+            inputs.captures.append(AudioInputCapture(name: "FaceTime", devices: [1], bundleID: "com.apple.FaceTime"))
+            inputTimer.tickForTesting()
+            precondition(inputTimer.currentPauseReason == .meeting && inputTimer.remainingSeconds == 59)
+            inputs.captures = [codex]
+            inputTimer.tickForTesting()
+            precondition(inputTimer.state == .working && inputTimer.remainingSeconds == 58)
+            print("PASS: the timer runs with Codex input, pauses for a call, and resumes with Codex still recording")
+
+            inputs.captures = [AudioInputCapture(name: "Edge voice input", devices: [1], bundleID: "com.microsoft.edgemac.helper")]
+            inputTimer.tickForTesting()
+            precondition(inputTimer.state == .working && inputTimer.remainingSeconds == 57)
+            defaults.set(true, forKey: SettingsKey.includeBrowserMicrophones)
+            inputTimer.refreshMeetingStatus()
+            precondition(inputTimer.currentPauseReason == .meeting && inputTimer.remainingSeconds == 57)
+            defaults.set(false, forKey: SettingsKey.includeBrowserMicrophones)
+            inputTimer.refreshMeetingStatus()
+            precondition(inputTimer.state == .working && inputTimer.remainingSeconds == 57)
+            inputTimer.tickForTesting()
+            precondition(inputTimer.remainingSeconds == 56)
+            print("PASS: enabling browser microphones pauses immediately; disabling them resumes the countdown")
+            inputTimer.pause()
+            defaults.set(true, forKey: SettingsKey.includeBrowserMicrophones)
+            inputTimer.refreshMeetingStatus()
+            defaults.set(false, forKey: SettingsKey.includeBrowserMicrophones)
+            inputTimer.refreshMeetingStatus()
+            precondition(inputTimer.currentPauseReason == .manual && inputTimer.remainingSeconds == 56)
+            print("PASS: changing browser detection never overrides a manual pause")
+        }
         let detector = StubMeetingDetector()
         let timer = TimerManager(meetingDetector: detector, defaults: defaults, startAutomatically: false)
 
